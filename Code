@@ -1,0 +1,691 @@
+local DrRayLibrary = loadstring(game:HttpGet("https://raw.githubusercontent.com/AZYsGithub/DrRay-UI-Library/main/DrRay.lua"))()
+
+local window = DrRayLibrary:Load("Rinns Hub", "Default")
+local tab = DrRayLibrary.newTab("Main Tab", "ImageIdHere")
+local tweenService = game:GetService("TweenService")
+local players = game:GetService("Players")
+local player = players.LocalPlayer
+local character = player.Character or player.CharacterAdded:Wait()
+local selectedCoinType = "None"
+local coinsCollected = 0
+local beachBallsCollected = 0
+local roles
+local runService = game:GetService("RunService")
+local isTweening = false
+local collectedCoins = {}
+
+-- Create GUI elements
+local screenGui = Instance.new("ScreenGui", player.PlayerGui)
+screenGui.Enabled = false
+local frame = Instance.new("Frame", screenGui)
+frame.Position = UDim2.new(1, -170, 0, 10)
+frame.Size = UDim2.new(0, 150, 0, 60)
+frame.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+frame.BorderSizePixel = 2
+frame.Draggable = true
+frame.Active = true
+
+local coinsLabel = Instance.new("TextLabel", frame)
+coinsLabel.Size = UDim2.new(1, 0, 0.5, 0)
+coinsLabel.Position = UDim2.new(0, 0, 0, 0)
+coinsLabel.TextColor3 = Color3.new(1, 1, 1)
+coinsLabel.Text = "Coins Collected: 0"
+coinsLabel.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+coinsLabel.BorderSizePixel = 0
+
+local beachBallsLabel = Instance.new("TextLabel", frame)
+beachBallsLabel.Size = UDim2.new(1, 0, 0.5, 0)
+beachBallsLabel.Position = UDim2.new(0, 0, 0.5, 0)
+beachBallsLabel.TextColor3 = Color3.new(1, 1, 1)
+beachBallsLabel.Text = "Beach Balls Collected: 0"
+beachBallsLabel.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+beachBallsLabel.BorderSizePixel = 0
+
+-- Function to find the closest Coin_Server
+local function findClosestCoinServer(coinContainer)
+    local closestCoinServer = nil
+    local closestDistance = math.huge
+    for _, coin in pairs(coinContainer:GetChildren()) do
+        if coin.Name == "Coin_Server" and not collectedCoins[coin] then
+            if selectedCoinType == "None" or 
+               (selectedCoinType == "Coins" and coin:FindFirstChild("CoinVisual") and coin.CoinVisual:FindFirstChild("MainCoin")) or 
+               (selectedCoinType == "Beach Balls" and (not coin:FindFirstChild("CoinVisual") or not coin.CoinVisual:FindFirstChild("MainCoin"))) then
+                local distance = (character.HumanoidRootPart.Position - coin.Position).magnitude
+                if distance < closestDistance then
+                    closestCoinServer = coin
+                    closestDistance = distance
+                end
+            end
+        end
+    end
+    return closestCoinServer
+end
+
+-- Function to tween the character
+local function tweenToPosition(targetCoin)
+    local humanoidRootPart = character:FindFirstChild("HumanoidRootPart")
+    if not humanoidRootPart then
+        character = player.Character or player.CharacterAdded:Wait()
+        humanoidRootPart = character:FindFirstChild("HumanoidRootPart")
+        if not humanoidRootPart then return false end
+    end
+
+    local startPosition = humanoidRootPart.Position
+    local targetPosition = targetCoin.Position - Vector3.new(0, 5, 0) -- 5 studs below the coin
+
+    local tweenInfo = TweenInfo.new((startPosition - targetPosition).magnitude / 50, Enum.EasingStyle.Linear)
+    local tween = tweenService:Create(humanoidRootPart, tweenInfo, {CFrame = CFrame.new(targetPosition) * CFrame.Angles(math.rad(-90), 0, 0)})
+
+    local tweenCompleted = false
+    tween.Completed:Connect(function()
+        tweenCompleted = true
+    end)
+
+    tween:Play()
+
+    -- Continuously check if the target coin is still there
+    while not tweenCompleted and _G.autoFarmCoins do
+        if not targetCoin.Parent then
+            print("Coin_Server disappeared, finding next target")
+            tween:Cancel()
+            return false
+        end
+        wait()
+    end
+
+    -- Slowly rise up to the coin
+    local finalPosition = targetCoin.Position
+    local riseTweenInfo = TweenInfo.new(0.5, Enum.EasingStyle.Linear)
+    local riseTween = tweenService:Create(humanoidRootPart, riseTweenInfo, {CFrame = CFrame.new(finalPosition) * CFrame.Angles(0, 0, 0)})
+
+    riseTween:Play()
+    riseTween.Completed:Wait()
+
+    return true
+end
+
+-- Function to check if the player is alive
+local function isPlayerAlive()
+    local roles = game:GetService("ReplicatedStorage"):FindFirstChild("GetPlayerData", true):InvokeServer()
+    local playerData = roles[player.Name]
+    return not playerData.Dead and not playerData.Killed
+end
+
+-- Function to reset player when coin bag is full
+local function resetWhenCoinBagIsFull()
+    spawn(function()
+        while _G.resetWhenFull do
+            local roles = game:GetService("ReplicatedStorage"):FindFirstChild("GetPlayerData", true):InvokeServer()
+            local playerData = roles[player.Name]
+            if selectedCoinType == "Coins" and playerData.Coins >= 40 then
+                player.Character:BreakJoints()
+                print("Resetting player, Coins: 40")
+            elseif selectedCoinType == "Beach Balls" and playerData.Coins >= 20 then
+                player.Character:BreakJoints()
+                print("Resetting player, Beach Balls: 20")
+            elseif selectedCoinType == "None" and playerData.Coins >= 60 then
+                player.Character:BreakJoints()
+                print("Resetting player, Coins: 60")
+            end
+            wait(0.2)
+        end
+    end)
+end
+
+-- Function to auto farm coins
+local function autoFarmCoins()
+    spawn(function()
+        while _G.autoFarmCoins do
+            local roles = game:GetService("ReplicatedStorage"):FindFirstChild("GetPlayerData", true):InvokeServer()
+            local playerData = roles[player.Name]
+
+            if playerData.Dead or playerData.Killed then
+                print("Player is dead or killed, pausing auto farm")
+                repeat
+                    wait(0.2)
+                    roles = game:GetService("ReplicatedStorage"):FindFirstChild("GetPlayerData", true):InvokeServer()
+                    playerData = roles[player.Name]
+                until not playerData.Dead and not playerData.Killed
+                print("Player is alive, resuming auto farm")
+            end
+
+            local normal = workspace:FindFirstChild("Normal")
+            if normal then
+                local coinContainer = normal:FindFirstChild("CoinContainer")
+                if coinContainer then
+                    local coin = findClosestCoinServer(coinContainer)
+                    while coin and _G.autoFarmCoins do
+                        if tweenToPosition(coin) then
+                            if selectedCoinType == "Coins" then
+                                if coin:FindFirstChild("CoinVisual") and coin.CoinVisual:FindFirstChild("MainCoin") then
+                                    coinsCollected = coinsCollected + 1
+                                    coinsLabel.Text = "Coins Collected: " .. coinsCollected
+                                    collectedCoins[coin] = true
+                                    print("Collected a coin, total: " .. coinsCollected)
+                                end
+                            elseif selectedCoinType == "Beach Balls" then
+                                if not coin:FindFirstChild("CoinVisual") or not coin.CoinVisual:FindFirstChild("MainCoin") then
+                                    beachBallsCollected = beachBallsCollected + 1
+                                    beachBallsLabel.Text = "Beach Balls Collected: " .. beachBallsCollected
+                                    collectedCoins[coin] = true
+                                    print("Collected a beach ball, total: " .. beachBallsCollected)
+                                end
+                            elseif selectedCoinType == "None" then
+                                if coin:FindFirstChild("CoinVisual") and coin.CoinVisual:FindFirstChild("MainCoin") then
+                                    coinsCollected = coinsCollected + 1
+                                    coinsLabel.Text = "Coins Collected: " .. coinsCollected
+                                    collectedCoins[coin] = true
+                                    print("Collected a coin, total: " .. coinsCollected)
+                                else
+                                    beachBallsCollected = beachBallsCollected + 1
+                                    beachBallsLabel.Text = "Beach Balls Collected: " .. beachBallsCollected
+                                    collectedCoins[coin] = true
+                                    print("Collected a beach ball, total: " .. beachBallsCollected)
+                                end
+                            end
+                            wait(0.2)
+                        end
+                        coin = findClosestCoinServer(coinContainer)
+                    end
+                end
+            end
+            wait(0.2)
+        end
+    end)
+end
+
+-- Function to teleport the player to the nearest coin
+local function teleportToCoin()
+    local normal = workspace:FindFirstChild("Normal")
+    if normal then
+        local coinContainer = normal:FindFirstChild("CoinContainer")
+        if coinContainer then
+            local coin = findClosestCoinServer(coinContainer)
+            if coin then
+                character:SetPrimaryPartCFrame(CFrame.new(coin.Position))
+                print("Teleported to coin")
+            end
+        end
+    end
+end
+
+-- Function to teleport the player to the nearest beach ball
+local function teleportToBeachBall()
+    local normal = workspace:FindFirstChild("Normal")
+    if normal then
+        local coinContainer = normal:FindFirstChild("CoinContainer")
+        if coinContainer then
+            for _, coin in pairs(coinContainer:GetChildren()) do
+                if coin.Name == "Coin_Server" and (not coin:FindFirstChild("CoinVisual") or not coin.CoinVisual:FindFirstChild("MainCoin")) then
+                    character:SetPrimaryPartCFrame(CFrame.new(coin.Position))
+                    print("Teleported to beach ball")
+                    return
+                end
+            end
+        end
+    end
+end
+
+-- GUI toggle function
+local function toggleGUI(state)
+    screenGui.Enabled = state
+end
+
+-- Tab UI
+tab.newToggle("Auto Farm Coins", "Auto Farms Coins For You", true, function(toggleState)
+    _G.autoFarmCoins = toggleState
+    if toggleState then
+        autoFarmCoins()
+    else
+        isTweening = false
+    end
+end)
+
+tab.newToggle("Reset When Coin Bag Is Full", "Resets Character When Coin Bag Is Full", false, function(toggleState)
+    _G.resetWhenFull = toggleState
+    if toggleState then
+        resetWhenCoinBagIsFull()
+    end
+end)
+
+tab.newDropdown("Select what coin you want to farm", "Farms Any type of coins if you don't select a specific one", {"Coins", "Beach Balls", "None"}, function(selectedOption)
+    selectedCoinType = selectedOption
+end)
+
+tab.newButton("Tp To Coin", "Teleport to nearest coin", function()
+    teleportToCoin()
+end)
+
+tab.newButton("Teleport to Beach Ball", "Teleport to nearest beach ball", function()
+    teleportToBeachBall()
+end)
+
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local Workspace = game:GetService("Workspace")
+local LP = Players.LocalPlayer
+local roles = {}
+local highlights = {}
+local espLabels = {}
+local lockOn = false
+local lockedTarget = nil
+local lockOnGui = nil
+local safePlacePart = nil
+local originalPosition = nil
+local safePlacePosition = Vector3.new(-414.71881103515625, 391.9100646972656, -1677.0933837890625)
+local lobbyPosition = Vector3.new(-107.91111755371094, 139.71022033691406, 24.34431266784668)
+
+-- Toggles
+local InnocentHighlights = false
+local InnocentNameEsp = false
+local MurdererHighlights = false
+local MurdererNameEsp = false
+local SheriffHighlights = false
+local SheriffNameEsp = false
+local HeroHighlights = false
+local HeroNameEsp = false
+local GunEsp = false
+local LockOnToMurderer = false
+local TeleportToSafePlace = false
+
+function IsAlive(Player)
+    for i, v in pairs(roles) do
+        if Player.Name == i then
+            return not v.Killed and not v.Dead
+        end
+    end
+    return false
+end
+
+function createHighlight(player, color)
+    if player and player.Character and not player.Character:FindFirstChild("Highlight") then
+        local highlight = Instance.new("Highlight", player.Character)
+        highlight.FillColor = color
+        highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+        highlights[player.Name] = highlight
+    end
+end
+
+function createEspLabel(player, color)
+    if player and player.Character and not player.Character:FindFirstChild("EspLabel") then
+        local espLabel = Instance.new("BillboardGui", player.Character)
+        espLabel.Name = "EspLabel"
+        espLabel.Size = UDim2.new(0, 200, 0, 50)
+        espLabel.StudsOffset = Vector3.new(0, 2, 0)
+        espLabel.AlwaysOnTop = true
+        
+        local nameLabel = Instance.new("TextLabel", espLabel)
+        nameLabel.Text = player.Name
+        nameLabel.Size = UDim2.new(1, 0, 0.5, 0)
+        nameLabel.TextColor3 = color
+        nameLabel.BackgroundTransparency = 1
+        nameLabel.Font = Enum.Font.SourceSansBold
+        
+        local distanceLabel = Instance.new("TextLabel", espLabel)
+        distanceLabel.Name = "DistanceLabel"
+        distanceLabel.Size = UDim2.new(1, 0, 0.5, 0)
+        distanceLabel.Position = UDim2.new(0, 0, 0.5, 0)
+        distanceLabel.TextColor3 = color
+        distanceLabel.BackgroundTransparency = 1
+        distanceLabel.Font = Enum.Font.SourceSansBold
+        
+        espLabels[player.Name] = espLabel
+    end
+end
+
+function updateEspLabel(player)
+    if espLabels[player.Name] and player.Character and player.Character:FindFirstChild("HumanoidRootPart") then
+        local distance = (player.Character.HumanoidRootPart.Position - LP.Character.HumanoidRootPart.Position).magnitude
+        player.Character.EspLabel.DistanceLabel.Text = string.format("%d studs", math.floor(distance))
+    end
+end
+
+function clearESP(player)
+    if highlights[player.Name] then
+        highlights[player.Name]:Destroy()
+        highlights[player.Name] = nil
+    end
+    if espLabels[player.Name] then
+        espLabels[player.Name]:Destroy()
+        espLabels[player.Name] = nil
+    end
+end
+
+function updateHighlightsAndEspLabels()
+    roles = ReplicatedStorage:FindFirstChild("GetPlayerData", true):InvokeServer()
+    local Murder, Sheriff, Hero = nil, nil, nil
+    local innocents = {}
+
+    for i, v in pairs(roles) do
+        local player = Players:FindFirstChild(i)
+        if v.Role == "Murderer" then
+            Murder = player
+        elseif v.Role == "Sheriff" then
+            Sheriff = player
+        elseif v.Role == "Hero" then
+            Hero = player
+        else
+            table.insert(innocents, player)
+        end
+    end
+
+    for _, player in pairs(Players:GetChildren()) do
+        if player ~= LP then
+            clearESP(player)  -- Clear previous ESP elements
+
+            if InnocentHighlights and table.find(innocents, player) and IsAlive(player) then
+                createHighlight(player, Color3.fromRGB(0, 225, 0))
+            end
+            if InnocentNameEsp and table.find(innocents, player) and IsAlive(player) then
+                createEspLabel(player, Color3.fromRGB(0, 225, 0))
+                updateEspLabel(player)
+            end
+            if MurdererHighlights and player == Murder and IsAlive(player) then
+                createHighlight(player, Color3.fromRGB(225, 0, 0))
+            end
+            if MurdererNameEsp and player == Murder and IsAlive(player) then
+                createEspLabel(player, Color3.fromRGB(225, 0, 0))
+                updateEspLabel(player)
+            end
+            if SheriffHighlights and player == Sheriff and IsAlive(player) then
+                createHighlight(player, Color3.fromRGB(0, 0, 225))
+            end
+            if SheriffNameEsp and player == Sheriff and IsAlive(player) then
+                createEspLabel(player, Color3.fromRGB(0, 0, 225))
+                updateEspLabel(player)
+            end
+            if HeroHighlights and player == Hero and IsAlive(player) then
+                createHighlight(player, Color3.fromRGB(255, 250, 0))
+            end
+            if HeroNameEsp and player == Hero and IsAlive(player) then
+                createEspLabel(player, Color3.fromRGB(255, 250, 0))
+                updateEspLabel(player)
+            end
+        end
+    end
+end
+
+function gunESP()
+    if GunEsp then
+        local normal = Workspace:FindFirstChild("Normal")
+        if normal then
+            local gunDrop = normal:FindFirstChild("GunDrop")
+            if gunDrop then
+                if not highlights["GunDrop"] then
+                    local highlight = Instance.new("Highlight", gunDrop)
+                    highlight.FillColor = Color3.fromRGB(255, 255, 0)
+                    highlights["GunDrop"] = highlight
+                end
+                
+                if not espLabels["GunDrop"] then
+                    local espLabel = Instance.new("BillboardGui", gunDrop)
+                    espLabel.Name = "EspLabel"
+                    espLabel.Size = UDim2.new(0, 200, 0, 50)
+                    espLabel.StudsOffset = Vector3.new(0, 2, 0)
+                    espLabel.AlwaysOnTop = true
+                    
+                    local nameLabel = Instance.new("TextLabel", espLabel)
+                    nameLabel.Text = "GunDrop"
+                    nameLabel.Size = UDim2.new(1, 0, 0.5, 0)
+                    nameLabel.TextColor3 = Color3.fromRGB(255, 255, 0)
+                    nameLabel.BackgroundTransparency = 1
+                    nameLabel.Font = Enum.Font.SourceSansBold
+                    
+                    local distanceLabel = Instance.new("TextLabel", espLabel)
+                    distanceLabel.Name = "DistanceLabel"
+                    distanceLabel.Size = UDim2.new(1, 0, 0.5, 0)
+                    distanceLabel.Position = UDim2.new(0, 0, 0.5, 0)
+                    distanceLabel.TextColor3 = Color3.fromRGB(255, 255, 0)
+                    distanceLabel.BackgroundTransparency = 1
+                    distanceLabel.Font = Enum.Font.SourceSansBold
+                    
+                    espLabels["GunDrop"] = espLabel
+                end
+                
+                local distance = (gunDrop.Position - LP.Character.HumanoidRootPart.Position).magnitude
+                gunDrop.EspLabel.DistanceLabel.Text = string.format("%d studs", math.floor(distance))
+            else
+                if highlights["GunDrop"] then
+                    highlights["GunDrop"]:Destroy()
+                    highlights["GunDrop"] = nil
+                end
+                if espLabels["GunDrop"] then
+                    espLabels["GunDrop"]:Destroy()
+                    espLabels["GunDrop"] = nil
+                end
+            end
+        end
+    end
+end
+
+function teleportToGunDrop()
+    local normal = Workspace:FindFirstChild("Normal")
+    if normal then
+        local gunDrop = normal:FindFirstChild("GunDrop")
+        if gunDrop and LP.Character and LP.Character:FindFirstChild("HumanoidRootPart") then
+            originalPosition = LP.Character.HumanoidRootPart.Position
+            LP.Character.HumanoidRootPart.CFrame = CFrame.new(gunDrop.Position + Vector3.new(0, 5, 0))
+            wait(0.6)
+            LP.Character.HumanoidRootPart.CFrame = CFrame.new(originalPosition)
+        end
+    end
+end
+
+function lockOntoMurderer()
+    if LockOnToMurderer and lockedTarget and lockedTarget.Character and lockedTarget.Character:FindFirstChild("HumanoidRootPart") and LP.Character and LP.Character:FindFirstChild("HumanoidRootPart") then
+        local camera = Workspace.CurrentCamera
+        local targetPos = lockedTarget.Character.HumanoidRootPart.Position
+        local cameraPos = camera.CFrame.Position
+        local newCFrame = CFrame.new(cameraPos, targetPos)
+        camera.CFrame = CFrame.new(cameraPos, targetPos):Lerp(newCFrame, 0.5)
+    end
+end
+
+function createLockOnButton()
+    if lockOnGui then return end
+
+    lockOnGui = Instance.new("ScreenGui", LP.PlayerGui)
+    lockOnGui.Name = "LockOnGui"
+
+    local button = Instance.new("TextButton", lockOnGui)
+    button.Size = UDim2.new(0, 100, 0, 50)
+    button.Position = UDim2.new(0.5, -50, 0.5, -25)
+    button.Text = "Lock On is Off"
+    button.BackgroundColor3 = Color3.fromRGB(100, 100, 100)
+    button.Font = Enum.Font.SourceSansBold
+    button.TextColor3 = Color3.fromRGB(255, 255, 255)
+    button.TextSize = 14
+    button.Draggable = true
+
+    local function toggleLockOn()
+        if LockOnToMurderer then
+            LockOnToMurderer = false
+            button.Text = "Lock On is Off"
+            lockedTarget = nil
+        else
+            LockOnToMurderer = true
+            button.Text = "Lock On is On"
+            local Murder = nil
+            for i, v in pairs(roles) do
+                if v.Role == "Murderer" then
+                    Murder = Players:FindFirstChild(i)
+                    break
+                end
+            end
+            if Murder then
+                lockedTarget = Murder
+            end
+        end
+    end
+
+    button.MouseButton1Click:Connect(toggleLockOn)
+end
+
+function reduceLag()
+    settings().Rendering.QualityLevel = Enum.QualityLevel.Level01
+    Workspace.Terrain.WaterWaveSize = 0
+    Workspace.Terrain.WaterWaveSpeed = 0
+    Workspace.Terrain.WaterReflectance = 0
+    Workspace.Terrain.WaterTransparency = 0
+    for _, v in pairs(Workspace:GetDescendants()) do
+        if v:IsA("Part") or v:IsA("UnionOperation") or v:IsA("MeshPart") or v:IsA("WedgePart") or v:IsA("CornerWedgePart") or v:IsA("TrussPart") then
+            v.Material = Enum.Material.Plastic
+            v.Reflectance = 0
+        end
+    end
+end
+
+function createSafePlacePart()
+    if not safePlacePart then
+        safePlacePart = Instance.new("Part")
+        safePlacePart.Position = safePlacePosition
+        safePlacePart.Anchored = true
+        safePlacePart.Size = Vector3.new(50, 1, 50)
+        safePlacePart.Transparency = 0.5
+        safePlacePart.Parent = Workspace
+    end
+end
+
+function teleportToSafePlace()
+    if LP.Character and LP.Character:FindFirstChild("HumanoidRootPart") then
+        originalPosition = LP.Character.HumanoidRootPart.Position
+        LP.Character.HumanoidRootPart.CFrame = CFrame.new(safePlacePart.Position + Vector3.new(0, 5, 0))
+    end
+end
+
+function returnToOriginalPosition()
+    if originalPosition and LP.Character and LP.Character:FindFirstChild("HumanoidRootPart") then
+        LP.Character.HumanoidRootPart.CFrame = CFrame.new(originalPosition)
+        originalPosition = nil
+    end
+end
+
+function teleportToLobby()
+    if LP.Character and LP.Character:FindFirstChild("HumanoidRootPart") then
+        LP.Character.HumanoidRootPart.CFrame = CFrame.new(lobbyPosition)
+    end
+end
+
+function teleportToMap()
+    local normal = Workspace:FindFirstChild("Normal")
+    if normal then
+        local map = normal:FindFirstChild("Map")
+        if map and LP.Character and LP.Character:FindFirstChild("HumanoidRootPart") then
+            LP.Character.HumanoidRootPart.CFrame = map.CFrame
+        end
+    end
+end
+
+function teleportToPlayerRole(role)
+    for i, v in pairs(roles) do
+        if v.Role == role then
+            local target = Players:FindFirstChild(i)
+            if target and target.Character and target.Character:FindFirstChild("HumanoidRootPart") and LP.Character and LP.Character:FindFirstChild("HumanoidRootPart") then
+                LP.Character.HumanoidRootPart.CFrame = target.Character.HumanoidRootPart.CFrame * CFrame.new(0, 0, 5)
+            end
+            break
+        end
+    end
+end
+
+tab.newToggle("Lock on to Murderer", "Locks the camera onto the Murderer", true, function(toggleState)
+    LockOnToMurderer = toggleState
+    if toggleState then
+        local Murder = nil
+        for i, v in pairs(roles) do
+            if v.Role == "Murderer" then
+                Murder = Players:FindFirstChild(i)
+                break
+            end
+        end
+        if Murder then
+            lockedTarget = Murder
+        end
+        createLockOnButton()
+    else
+        if lockOnGui then
+            lockOnGui:Destroy()
+            lockOnGui = nil
+        end
+        lockedTarget = nil
+    end
+end)
+
+tab.newToggle("Teleport to Safe Place", "Teleports to a safe place", false, function(toggleState)
+    TeleportToSafePlace = toggleState
+    if toggleState then
+        createSafePlacePart()
+        teleportToSafePlace()
+    else
+        returnToOriginalPosition()
+    end
+end)
+
+tab.newButton("Get Gun Drop", "Gets the Gun Drop Whenever Nobody has it", function()
+    teleportToGunDrop()
+end)
+
+tab.newButton("Less Lag", "Reduces graphics for better performance", function()
+    reduceLag()
+end)
+
+tab.newButton("Teleport to Lobby", "Teleports to the lobby", function()
+    teleportToLobby()
+end)
+
+tab.newButton("Teleport to Map", "Teleports to the map", function()
+    teleportToMap()
+end)
+
+tab.newButton("Teleport to Murderer", "Teleports behind the Murderer", function()
+    teleportToPlayerRole("Murderer")
+end)
+
+tab.newButton("Teleport to Sheriff", "Teleports behind the Sheriff", function()
+    teleportToPlayerRole("Sheriff")
+end)
+
+local tab = DrRayLibrary.newTab("Esp Tab", "ImageIdHere")
+
+tab.newToggle("Innocent Highlights", "Highlights the innocents green", true, function(toggleState)
+    InnocentHighlights = toggleState
+end)
+
+tab.newToggle("Innocent name and distance ESP", "Shows the name and distance to innocents", true, function(toggleState)
+    InnocentNameEsp = toggleState
+end)
+
+tab.newToggle("Murderer Highlights", "Highlights the Murderer Red", true, function(toggleState)
+    MurdererHighlights = toggleState
+end)
+
+tab.newToggle("Murderer name and distance ESP", "Shows the name and distance to the Murderer", true, function(toggleState)
+    MurdererNameEsp = toggleState
+end)
+
+tab.newToggle("Sheriff Highlights", "Highlights the Sheriff Blue", true, function(toggleState)
+    SheriffHighlights = toggleState
+end)
+
+tab.newToggle("Sheriff name and distance ESP", "Shows the name and distance to the Sheriff", true, function(toggleState)
+    SheriffNameEsp = toggleState
+end)
+
+tab.newToggle("Hero Highlights", "Highlights the Hero Yellow", true, function(toggleState)
+    HeroHighlights = toggleState
+end)
+
+tab.newToggle("Hero name and distance ESP", "Shows the name and distance to the Hero", true, function(toggleState)
+    HeroNameEsp = toggleState
+end)
+
+tab.newToggle("Gun esp", "Highlights the gun drop and shows the distance", true, function(toggleState)
+    GunEsp = toggleState
+end)
+
+RunService.RenderStepped:Connect(function()
+    updateHighlightsAndEspLabels()
+    gunESP()
+    lockOntoMurderer()
+end)
